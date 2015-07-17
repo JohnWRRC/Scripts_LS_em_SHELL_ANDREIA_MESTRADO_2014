@@ -1,0 +1,172 @@
+
+cd "F:\data\john_pc2\AndreiaRJ\grass_teste\rasters_entrada"
+r.in.gdal in=pontos_amostrais_rast_buff_50m_v02.img out=pontos_amostrais_rast_buff_50m_img -o --o 
+r.in.gdal in=Uso_APA_novo_resist_rast.img out=Uso_APA_novo_resist_rast_img -o --o
+
+g.region -p rast=Uso_APA_novo_resist_rast_img
+r.mapcalc "Uso_APA_novo_resist_rast_img_semnull=if(isnull(Uso_APA_novo_resist_rast_img),1,Uso_APA_novo_resist_rast_img)"
+
+#patch_id_list=`r.stats -n input=campos_patch_clump_mata_limpa_img`
+g.region rast=Uso_APA_novo_resist_rast_img_semnull
+patch_id_list=(2 5 2 10 3 18)
+S1=""
+T1=""
+for i in "${patch_id_list[@]}"
+do
+   if [ "$S1" == "" ]
+      then 
+          S1=$i
+          continue
+      else
+          T1=$i
+      fi
+   echo "$S1 $T1"
+ 
+padtowidth=5
+S1format=`printf "%0*d" $padtowidth $S1`
+T1format=`printf "%0*d" $padtowidth $T1`
+echo "$S1format $T1format"
+
+
+
+
+  ##................
+
+  cd "F:\data\john_pc2\projeto_modelagem_canastra\grass_v02" ## caminho onde sera gravado o txt com os results
+   PAISAGEM="LANDSCAPE01"
+   ARQSAIDA=$PAISAGEM$"_s"$S1format$"_t"$T1format$".txt"
+
+  ##....
+
+
+g.remove -f vect=source_shp,target_shp,pnts_aleat_S,pnts_aleat_T
+
+r.mapcalc "source=if(pontos_amostrais_rast_buff_50m_img!=$S1format,null(),$S1format)"
+r.mapcalc "target=if(pontos_amostrais_rast_buff_50m_img!=$T1format,null(),$T1format)"
+
+r.to.vect in=source out=source_shp feature=area --o -v
+r.to.vect in=target out=target_shp feature=area --o -v
+
+v.db.addcol map=source_shp columns="x double precision, y double precision" --o
+v.db.addcol map=target_shp columns="x double precision, y double precision" --o
+v.to.db map=source_shp opt=coor columns="x,y" --o
+v.to.db map=target_shp opt=coor columns="x,y" --o
+
+
+var_source_x=`v.db.select source_shp -c| awk '{split($0,a,"|"); print a[3]}' `
+var_source_y=`v.db.select source_shp -c| awk '{split($0,a,"|"); print a[4]}' `
+var_target_x=`v.db.select target_shp -c| awk '{split($0,a,"|"); print a[3]}' `
+var_target_y=`v.db.select target_shp -c| awk '{split($0,a,"|"); print a[4]}' `
+
+
+g.region rast=Uso_APA_novo_resist_rast_img_semnull
+g.region -p
+mapa_custo=Uso_APA_novo_resist_rast_img_semnull
+mapa_corredores="corredores_s"$S1format$"_t"$T1format
+mapa_corredores_sem0="corredores_s"$S1format$"_t"$T1format$"_sem0"
+r.mapcalc "$mapa_corredores=0"
+
+for i in {1..3}
+do
+	echo "------------------------------------------------------------------"
+echo "=====> rodando : $i"
+   if [ $i -le 25 ]; then
+        g.region vect=source_shp res=30
+        v.random output=pnts_aleat_S n=1 --o
+        g.region vect=target_shp
+        v.random output=pnts_aleat_T n=1 --o
+        
+
+   else
+        g.region vect=source_shp res=30
+        v.random output=pnts_aleat_S n=1 --o
+        g.region vect=target_shp
+        v.random output=pnts_aleat_T n=1 --o
+        
+   fi
+ 
+
+   g.region rast=source,target res=30
+
+   r.mapcalc "corredores_aux=$mapa_corredores"
+   r.random.surface output=aleat high=100 --o
+   r.mapcalc "aleat2=1+((aleat/100.0)*2.0)"
+   r.mapcalc "custo_aux=$mapa_custo*aleat2"
+   r.cost -k input=custo_aux output=custo_aux_cost start_points=pnts_aleat_S stop_points=pnts_aleat_T --o
+   r.drain input=custo_aux_cost output=custo_aux_cost_drain vector_points=pnts_aleat_T --o
+
+
+   #r.to.vect -b input=custo_aux_cost_drain output=custo_aux_cost_drain_line feature=line --o
+
+   #v.build.all 
+   #v.db.addcol custo_aux_cost_drain_line column="dist double precision"
+   #v.to.db map=custo_aux_cost_drain_line option=length type=line col=dist units=me
+   
+
+   r.series input=corredores_aux,custo_aux_cost_drain output=$mapa_corredores method=sum --o
+   r.mapcalc "custo_aux_cost_drain_sum=custo_aux_cost_drain*custo_nivel1_semnull"
+   var_cost_sum=`r.univar  custo_aux_cost_drain_sum|grep sum|awk '{gsub("sum: ","");print }'`
+   g.region rast=Uso_APA_novo_resist_rast_img_semnull
+
+   r.mapcalc "$mapa_corredores_sem0=if($mapa_corredores==0,null(),$mapa_corredores)"
+   r.mapcalc "custo_aux_cost_drain_sem0=if(custo_aux_cost_drain==0,null(),custo_aux_cost_drain)"  
+   
+   
+   r.to.vect -b input=custo_aux_cost_drain_sem0 output=custo_aux_cost_drain_sem0_line feature=line --o
+
+   v.build.all 
+   v.db.addcol custo_aux_cost_drain_sem0_line column="dist double precision"
+   v.to.db map=custo_aux_cost_drain_sem0_line option=length type=line col=dist units=me
+   var_dist_line=`v.db.select -c map=custo_aux_cost_drain_sem0_line column=dist where="cat=1"`
+
+
+   linha=$ARQSAIDA$" simulacao="$i$" lengthvect="$var_dist_line$"  somarast="$var_cost_sum$" source_x="$var_source_x$" source_y="$var_source_y$" target_x="$var_target_x$" target_y="$var_target_y
+
+   ## esse $'\r' abaixo serve pra dar ENTER no final de cada linha
+   echo $linha$'\r' >>$ARQSAIDA
+
+   
+   S1=""
+   T1=""
+done
+g.remove -f vect=source_shp,target_shp,pnts_aleat_S,pnts_aleat_T
+done
+
+
+
+
+
+
+
+
+
+#############Export corredores
+corre=`g.mlist  pattern="corredores*"`
+cd "F:\data\Juliana_inpe\st_pai3\grass2\saidas\corredores"
+for f_incor in $corre
+do
+r.out.gdal input=$f_incor output=$f_incor.tif format=GTiff --v nodata=-9999
+
+done  
+
+
+#########################Export custo
+cd "//LAF-JULIANA\Users\juliana\Documents\RESULTADOS_DOUTORADO\Paisagens_Modelos_Smmal_Mammals\Corredores\st_pai1\grass\saidas\custo_st"
+custos=`g.mlist  pattern="Custo*"`
+for f_inc in $custos
+do
+r.out.gdal input=$f_inc output=$f_inc.tif format=GTiff
+done
+##################export sts
+cd "//LAF-JULIANA\Users\juliana\Documents\RESULTADOS_DOUTORADO\Paisagens_Modelos_Smmal_Mammals\Corredores\st_pai1\grass\saidas\custo_st"
+st=`g.mlist  pattern="st*"`
+for f_ins in $st
+do
+r.out.gdal input=$f_ins output=$f_ins.tif format=GTiff 
+done
+
+
+
+remove=`g.mlist type=vect pattern="(*)" sep="comma" ` 
+g.remove -f vect=$remove
+
